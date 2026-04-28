@@ -870,7 +870,7 @@ function showWelcome(){
 function recalcForHolidays(s){
   s.data.forEach(r=>{
     if(!r.daily||!r.daily.length) return;
-    let holWorkDays=0, holAbsent=0, holMissed=0;
+    let holWorkDays=0, holAbsent=0, holMissedIn=0, holMissedOut=0, holLateCount=0;
     r.daily.forEach(d=>{
       if(!isHoliday(d.date)) return;
       holWorkDays++;
@@ -879,20 +879,33 @@ function recalcForHolidays(s){
       if(st.includes('ຂາດ')||st.includes('absent')||st==='-'||st===''||st==='nan'||st.includes('no record')){
         holAbsent++;
       }
-      // Count missed scans on holiday — "no record" style statuses per scan slot
-      // Each holiday day could have up to 2 missed (in+out). Count parts that are no record.
+      // Count late on holiday
+      if(st.includes('ຊ້າ')||st.includes('late')){
+        holLateCount++;
+      }
+      // Count missed scans — split by comma: first part = in, second = out
       const parts=st.split(',').map(p=>p.trim());
-      parts.forEach(p=>{
-        if(p==='-'||p===''||p==='nan'||p.includes('no record')) holMissed++;
-      });
-      // If full day no record (single value), count as 2 missed (in+out)
-      if(parts.length===1&&(st==='-'||st===''||st==='nan'||st.includes('no record'))) holMissed++;
+      if(parts.length>=2){
+        if(parts[0]==='-'||parts[0]===''||parts[0]==='nan'||parts[0].includes('no record')) holMissedIn++;
+        if(parts[1]==='-'||parts[1]===''||parts[1]==='nan'||parts[1].includes('no record')) holMissedOut++;
+      } else {
+        // Single value — no record means both in and out missing
+        if(st==='-'||st===''||st==='nan'||st.includes('no record')){
+          holMissedIn++; holMissedOut++;
+        }
+      }
     });
+    const holMissed = holMissedIn + holMissedOut;
+    // Proportional late_min deduction
+    const holLateMin = (holLateCount>0 && (r.late_count||0)>0)
+      ? Math.round((holLateCount/(r.late_count||1))*(r.late_min||0)) : 0;
     r.expected_days_adj = Math.max(0, (r.expected_days||0) - holWorkDays);
     r.absent_days_adj   = Math.max(0, (r.absent_days||0)   - holAbsent);
     r.missed_total_adj  = Math.max(0, (r.missed_total||0)  - holMissed);
-    r.missed_in_adj     = Math.max(0, (r.missed_in||0)     - Math.ceil(holMissed/2));
-    r.missed_out_adj    = Math.max(0, (r.missed_out||0)    - Math.floor(holMissed/2));
+    r.missed_in_adj     = Math.max(0, (r.missed_in||0)     - holMissedIn);
+    r.missed_out_adj    = Math.max(0, (r.missed_out||0)    - holMissedOut);
+    r.late_count_adj    = Math.max(0, (r.late_count||0)    - holLateCount);
+    r.late_min_adj      = Math.max(0, (r.late_min||0)      - holLateMin);
     r.holiday_days      = holWorkDays;
   });
 }
@@ -903,19 +916,21 @@ function getAdj(r, key){
   if(key==='missed_total')  return r.missed_total_adj  !== undefined ? r.missed_total_adj  : r.missed_total;
   if(key==='missed_in')     return r.missed_in_adj     !== undefined ? r.missed_in_adj     : r.missed_in;
   if(key==='missed_out')    return r.missed_out_adj    !== undefined ? r.missed_out_adj    : r.missed_out;
+  if(key==='late_count')    return r.late_count_adj    !== undefined ? r.late_count_adj    : r.late_count;
+  if(key==='late_min')      return r.late_min_adj      !== undefined ? r.late_min_adj      : r.late_min;
   return r[key];
 }
 
 function mkBadgeAdj(r){
   const ab=getAdj(r,'absent_days');
   if(ab>=10) return '<span class="badge b-bd">⚠ ຂາດຫຼາຍ</span>';
-  if(ab>=3||r.late_min>=60||getAdj(r,'missed_total')>=10) return '<span class="badge b-wn">! ຕ້ອງກວດ</span>';
+  if(ab>=3||getAdj(r,'late_min')>=60||getAdj(r,'missed_total')>=10) return '<span class="badge b-wn">! ຕ້ອງກວດ</span>';
   return '<span class="badge b-ok">✓ ປົກກະຕິ</span>';
 }
 function mkBadgeTextAdj(r){
   const ab=getAdj(r,'absent_days');
   if(ab>=10) return 'ຂາດຫຼາຍ';
-  if(ab>=3||r.late_min>=60||getAdj(r,'missed_total')>=10) return 'ຕ້ອງກວດ';
+  if(ab>=3||getAdj(r,'late_min')>=60||getAdj(r,'missed_total')>=10) return 'ຕ້ອງກວດ';
   return 'ປົກກະຕິ';
 }
 
@@ -980,7 +995,7 @@ function showDetail(name){
   document.getElementById('m-grid').innerHTML=`
     <div class="m-item"><div class="m-lb">ການມາ / ວັນວຽກ</div><div class="m-vl">${emp.present_days}/${emp.expected_days}</div></div>
     <div class="m-item"><div class="m-lb">ຂາດວຽກ (ມື້)</div><div class="m-vl" style="color:${getAdj(emp,'absent_days')>0?'var(--red)':'var(--tx)'}">${getAdj(emp,'absent_days')}${emp.holiday_days>0?' <small style="color:#7c3aed;font-size:10px">(ຫັກ '+emp.holiday_days+' ວັນພັກ)</small>':''}</div></div>
-    <div class="m-item"><div class="m-lb">ມາຊ້າ (ຄັ້ງ / ນທ)</div><div class="m-vl" style="color:${emp.late_count>0?'var(--amb)':'var(--tx)'}">${emp.late_count} / ${emp.late_min}</div></div>
+    <div class="m-item"><div class="m-lb">ມາຊ້າ (ຄັ້ງ / ນທ)</div><div class="m-vl" style="color:${getAdj(emp,'late_count')>0?'var(--amb)':'var(--tx)'}">${getAdj(emp,'late_count')} / ${getAdj(emp,'late_min')}</div></div>
     <div class="m-item"><div class="m-lb">ອອກໄວ (ຄັ້ງ / ນທ)</div><div class="m-vl">${emp.early_count} / ${emp.early_min}</div></div>
     <div class="m-item"><div class="m-lb">ລືມສະແກນເຂົ້າ</div><div class="m-vl">${getAdj(emp,'missed_in')}</div></div>
     <div class="m-item"><div class="m-lb">ລືມສະແກນອອກ</div><div class="m-vl">${getAdj(emp,'missed_out')}</div></div>
@@ -1012,13 +1027,13 @@ function render(){
   if(flt==='bad') data=data.filter(r=>getAdj(r,'absent_days')>=10);
   else if(flt==='late') data=data.filter(r=>r.late_count>0);
   else if(flt==='miss') data=data.filter(r=>getAdj(r,'missed_total')>0);
-  data.sort((a,b)=>{ const _adj_keys=['absent_days','expected_days','missed_total']; const av=_adj_keys.includes(srtKey)?getAdj(a,srtKey):a[srtKey], bv=_adj_keys.includes(srtKey)?getAdj(b,srtKey):b[srtKey]; if(typeof av==='string') return srtAsc?av.localeCompare(bv):bv.localeCompare(av); return srtAsc?av-bv:bv-av; });
+  data.sort((a,b)=>{ const _adj_keys=['absent_days','expected_days','missed_total','late_count','late_min']; const av=_adj_keys.includes(srtKey)?getAdj(a,srtKey):a[srtKey], bv=_adj_keys.includes(srtKey)?getAdj(b,srtKey):b[srtKey]; if(typeof av==='string') return srtAsc?av.localeCompare(bv):bv.localeCompare(av); return srtAsc?av-bv:bv-av; });
   if(!data.length){ document.getElementById('tbody').innerHTML=`<tr><td colspan="9"><div class="empty"><p>ບໍ່ພົບຂໍ້ມູນ</p></div></td></tr>`; document.getElementById('tbl-ct').textContent=''; return; }
   document.getElementById('tbody').innerHTML=data.map(r=>`<tr onclick="showDetail('${r.name.replace(/'/g,"\\'")}')">
     <td>${r.name}</td><td class="mn">${r.expected_days}</td>
     <td>${pbar(r.present_days,getAdj(r,'expected_days'))}</td>
-    <td>${nc(getAdj(r,'absent_days'),3,10)}</td><td>${nc(r.late_count,3,8)}</td>
-    <td>${nc(r.late_min,30,90)}</td><td>${nc(r.early_count,2,5)}</td>
+    <td>${nc(getAdj(r,'absent_days'),3,10)}</td><td>${nc(getAdj(r,'late_count'),3,8)}</td>
+    <td>${nc(getAdj(r,'late_min'),30,90)}</td><td>${nc(r.early_count,2,5)}</td>
     <td>${nc(getAdj(r,'missed_total'),5,15)}</td><td>${mkBadgeAdj(r)}</td>
   </tr>`).join('');
   document.getElementById('tbl-ct').textContent=`ສະແດງ ${data.length} / ${sheets[activeId].data.length} ຄົນ`;
@@ -1028,7 +1043,7 @@ function render(){
 function updateStats(d){
   document.getElementById('s-total').textContent=d.length;
   document.getElementById('s-absent').textContent=d.reduce((a,r)=>a+getAdj(r,'absent_days'),0);
-  document.getElementById('s-late').textContent=d.reduce((a,r)=>a+r.late_min,0);
+  document.getElementById('s-late').textContent=d.reduce((a,r)=>a+getAdj(r,'late_min'),0);
   document.getElementById('s-miss').textContent=d.reduce((a,r)=>a+getAdj(r,'missed_total'),0);
 }
 
@@ -1142,7 +1157,7 @@ function exportSummary(s){
   const headers=['ລຳດັບ','ຊື່-ນາມສະກຸນ','ວັນວຽກ','ມາ (ວັນ)','ຂາດ (ວັນ)','ຊ້າ (ຄັ້ງ)','ນາທີຊ້າ','ຮອບລືມ','ສະຖານະ'];
   const rows=[headers,...s.data.map((r,i)=>[
     i+1, r.name, getAdj(r,'expected_days'), r.present_days, getAdj(r,'absent_days'),
-    r.late_count, r.late_min, getAdj(r,'missed_total'), mkBadgeTextAdj(r)
+    getAdj(r,'late_count'), getAdj(r,'late_min'), getAdj(r,'missed_total'), mkBadgeTextAdj(r)
   ])];
   const ws=XLSX.utils.aoa_to_sheet(rows);
   ws['!cols']=[{wch:5},{wch:28},{wch:8},{wch:8},{wch:8},{wch:8},{wch:10},{wch:10},{wch:12}];
@@ -1215,7 +1230,7 @@ function exportFull(s){
   const wb=XLSX.utils.book_new();
   // Sheet 1: Summary
   const h1=['ລຳດັບ','ຊື່-ນາມສະກຸນ','ວັນວຽກ','ມາ (ວັນ)','ຂາດ (ວັນ)','ຊ້າ (ຄັ້ງ)','ນາທີຊ້າ','ຮອບລືມ','ສະຖານະ'];
-  const r1=[h1,...s.data.map((r,i)=>[i+1,r.name,getAdj(r,'expected_days'),r.present_days,getAdj(r,'absent_days'),r.late_count,r.late_min,getAdj(r,'missed_total'),mkBadgeTextAdj(r)])];
+  const r1=[h1,...s.data.map((r,i)=>[i+1,r.name,getAdj(r,'expected_days'),r.present_days,getAdj(r,'absent_days'),getAdj(r,'late_count'),getAdj(r,'late_min'),getAdj(r,'missed_total'),mkBadgeTextAdj(r)])];
   const ws1=XLSX.utils.aoa_to_sheet(r1);
   ws1['!cols']=[{wch:5},{wch:28},{wch:8},{wch:8},{wch:8},{wch:8},{wch:10},{wch:10},{wch:12}];
   h1.forEach((_,ci)=>{
