@@ -907,17 +907,44 @@ function recalcForHolidays(s){
     r.late_count_adj    = Math.max(0, (r.late_count||0)    - holLateCount);
     r.late_min_adj      = Math.max(0, (r.late_min||0)      - holLateMin);
     r.holiday_days      = holWorkDays;
+
+    // --- Compute all effective stats from daily (exclude holidays + weekend/break) ---
+    let effExp=0, effPre=0, holEarlyCount=0;
+    r.daily.forEach(d=>{
+      if(isHoliday(d.date)) return;
+      const st=String(d.status||'').toLowerCase().trim();
+      if(!st||st.startsWith('break')||st==='off') return;
+      effExp++;
+      if(st.includes('regular')||st.includes('late')||st.includes('early')||
+         st.includes('ປົກກະຕິ')||st.includes('ຊ້າ')||st.includes('ໄວ')) effPre++;
+    });
+    // Count early on holiday days for deduction
+    r.daily.forEach(d=>{
+      if(!isHoliday(d.date)) return;
+      const st=String(d.status||'').toLowerCase();
+      if(st.includes('early')||st.includes('ໄວ')) holEarlyCount++;
+    });
+    const holEarlyMin = (holEarlyCount>0&&(r.early_count||0)>0)
+      ? Math.round((holEarlyCount/(r.early_count||1))*(r.early_min||0)) : 0;
+    r.early_count_adj = Math.max(0,(r.early_count||0)-holEarlyCount);
+    r.early_min_adj   = Math.max(0,(r.early_min||0)-holEarlyMin);
+
+    r.eff_expected = effExp>0 ? effExp : r.expected_days_adj;
+    r.eff_present  = effExp>0 ? effPre : r.present_days;
+    r.eff_absent   = Math.max(0, r.eff_expected - r.eff_present);
   });
 }
 
 function getAdj(r, key){
-  if(key==='absent_days')   return r.absent_days_adj   !== undefined ? r.absent_days_adj   : r.absent_days;
-  if(key==='expected_days') return r.expected_days_adj !== undefined ? r.expected_days_adj : r.expected_days;
+  if(key==='absent_days')   return r.eff_absent       !== undefined ? r.eff_absent        : (r.absent_days_adj   !== undefined ? r.absent_days_adj   : r.absent_days);
+  if(key==='expected_days') return r.eff_expected      !== undefined ? r.eff_expected      : (r.expected_days_adj !== undefined ? r.expected_days_adj : r.expected_days);
   if(key==='missed_total')  return r.missed_total_adj  !== undefined ? r.missed_total_adj  : r.missed_total;
   if(key==='missed_in')     return r.missed_in_adj     !== undefined ? r.missed_in_adj     : r.missed_in;
   if(key==='missed_out')    return r.missed_out_adj    !== undefined ? r.missed_out_adj    : r.missed_out;
   if(key==='late_count')    return r.late_count_adj    !== undefined ? r.late_count_adj    : r.late_count;
   if(key==='late_min')      return r.late_min_adj      !== undefined ? r.late_min_adj      : r.late_min;
+  if(key==='early_count')   return r.early_count_adj   !== undefined ? r.early_count_adj   : r.early_count;
+  if(key==='early_min')     return r.early_min_adj     !== undefined ? r.early_min_adj     : r.early_min;
   return r[key];
 }
 
@@ -993,10 +1020,10 @@ function showDetail(name){
   document.getElementById('m-nm').textContent=emp.name;
   document.getElementById('m-st').innerHTML=mkBadgeAdj(emp);
   document.getElementById('m-grid').innerHTML=`
-    <div class="m-item"><div class="m-lb">ການມາ / ວັນວຽກ</div><div class="m-vl">${emp.present_days}/${emp.expected_days}</div></div>
+    <div class="m-item"><div class="m-lb">ການມາ / ວັນວຽກ</div><div class="m-vl">${emp.eff_present!=null?emp.eff_present:emp.present_days}/${emp.eff_expected!=null?emp.eff_expected:emp.expected_days}</div></div>
     <div class="m-item"><div class="m-lb">ຂາດວຽກ (ມື້)</div><div class="m-vl" style="color:${getAdj(emp,'absent_days')>0?'var(--red)':'var(--tx)'}">${getAdj(emp,'absent_days')}${emp.holiday_days>0?' <small style="color:#7c3aed;font-size:10px">(ຫັກ '+emp.holiday_days+' ວັນພັກ)</small>':''}</div></div>
     <div class="m-item"><div class="m-lb">ມາຊ້າ (ຄັ້ງ / ນທ)</div><div class="m-vl" style="color:${getAdj(emp,'late_count')>0?'var(--amb)':'var(--tx)'}">${getAdj(emp,'late_count')} / ${getAdj(emp,'late_min')}</div></div>
-    <div class="m-item"><div class="m-lb">ອອກໄວ (ຄັ້ງ / ນທ)</div><div class="m-vl">${emp.early_count} / ${emp.early_min}</div></div>
+    <div class="m-item"><div class="m-lb">ອອກໄວ (ຄັ້ງ / ນທ)</div><div class="m-vl">${getAdj(emp,'early_count')} / ${getAdj(emp,'early_min')}</div></div>
     <div class="m-item"><div class="m-lb">ລືມສະແກນເຂົ້າ</div><div class="m-vl">${getAdj(emp,'missed_in')}</div></div>
     <div class="m-item"><div class="m-lb">ລືມສະແກນອອກ</div><div class="m-vl">${getAdj(emp,'missed_out')}</div></div>
   `;
@@ -1030,10 +1057,10 @@ function render(){
   data.sort((a,b)=>{ const _adj_keys=['absent_days','expected_days','missed_total','late_count','late_min']; const av=_adj_keys.includes(srtKey)?getAdj(a,srtKey):a[srtKey], bv=_adj_keys.includes(srtKey)?getAdj(b,srtKey):b[srtKey]; if(typeof av==='string') return srtAsc?av.localeCompare(bv):bv.localeCompare(av); return srtAsc?av-bv:bv-av; });
   if(!data.length){ document.getElementById('tbody').innerHTML=`<tr><td colspan="9"><div class="empty"><p>ບໍ່ພົບຂໍ້ມູນ</p></div></td></tr>`; document.getElementById('tbl-ct').textContent=''; return; }
   document.getElementById('tbody').innerHTML=data.map(r=>`<tr onclick="showDetail('${r.name.replace(/'/g,"\\'")}')">
-    <td>${r.name}</td><td class="mn">${r.expected_days}</td>
-    <td>${pbar(r.present_days,getAdj(r,'expected_days'))}</td>
+    <td>${r.name}</td><td class="mn">${r.eff_expected!=null?r.eff_expected:r.expected_days}</td>
+    <td>${pbar(r.eff_present!=null?r.eff_present:r.present_days, r.eff_expected||getAdj(r,'expected_days'))}</td>
     <td>${nc(getAdj(r,'absent_days'),3,10)}</td><td>${nc(getAdj(r,'late_count'),3,8)}</td>
-    <td>${nc(getAdj(r,'late_min'),30,90)}</td><td>${nc(r.early_count,2,5)}</td>
+    <td>${nc(getAdj(r,'late_min'),30,90)}</td><td>${nc(getAdj(r,'early_count'),2,5)}</td>
     <td>${nc(getAdj(r,'missed_total'),5,15)}</td><td>${mkBadgeAdj(r)}</td>
   </tr>`).join('');
   document.getElementById('tbl-ct').textContent=`ສະແດງ ${data.length} / ${sheets[activeId].data.length} ຄົນ`;
